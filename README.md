@@ -82,7 +82,8 @@ Changes so far:
 - Fixed Julia JSON parser compatibility and adjusted the existing CI test launcher.
 - Updated Image Processing's bucket names and pinned `Werkzeug==2.3.8` for Flask 2.1 compatibility.
 - Raised `ImageProcessing_GetInput` to 256 MiB and matched its workflow memory metadata.
-- Added `offload-host.sh` for SSH setup with a Python virtual environment. `setup.sh` now keeps an existing Docker installation.
+- Added `offload-host.sh` to prepare the host, initialize routing and start the agents. `setup.sh` keeps an existing Docker installation.
+- Offloaded images use Python 3.12, `setuptools<81` for the old Datastore SDK, and files owned by the original `bin` runtime user.
 
 ## GCP and offload host setup
 
@@ -107,6 +108,8 @@ For a replacement Ubuntu CloudLab host with SSH and passwordless sudo, run from 
   --scheduler-key /path/to/schedulerKey.json
 ```
 
-The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, copies only missing keys, authenticates gcloud with the host key, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-research-espol`; override with `--project ID`. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It prepares the machine without starting the agents.
+The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, copies only missing keys, authenticates gcloud with the host key, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-research-espol`; override with `--project ID`. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It then starts `ImageProcessingWorkflow` with one offload host in latency mode.
+
+Startup uses UTC timestamps and three `test.png` warm-up requests so the original collector has two complete records for traffic-rate estimation. It waits for the warm-ups, then runs `initialDeploy.sh` in the background. An existing run is kept; a fresh run stops Docker containers and clears workflow history through the original initializer. Output: `~/unfaasener/scheduler/logs/initialDeploy.log`.
 
 Logs Viewer (`roles/logging.viewer`) is granted to `unfaas-host` for log collection. IAM roles belong to the service account; its existing JSON key remains valid without changes.

@@ -69,11 +69,41 @@ export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
 cd "$HOME/unfaasener"
 gcloud auth activate-service-account --key-file=host-agents/execution-agent/vmExeModule.json --project="$1"
 sed -i "s/^projectid *=.*/projectid = $1/" project-config.ini
-if [[ ! -d venv ]]; then python3 -m venv venv; fi
+if [[ ! -x venv/bin/pip ]]; then python3 -m venv venv; fi
 source venv/bin/activate
 bash -e setup.sh
 bash -e build.sh
 sudo systemctl enable --now docker
 REMOTE
 
-printf 'Host prepared. Open a new SSH session for Docker group access:\n  ssh %s\n  cd ~/unfaasener && source venv/bin/activate\n' "$target"
+ssh "$target" 'bash -se' <<'REMOTE'
+export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
+export TZ=UTC PYTHONUNBUFFERED=1
+cd "$HOME/unfaasener"
+source venv/bin/activate
+if pgrep -u "$USER" -f '^bash initialDeploy.sh ' >/dev/null; then
+    echo 'UnFaaSener is already running.'
+    exit 0
+fi
+rm -f scheduler/juliaStdin scheduler/juliaStdout
+python3 scheduler/resetRoutingDecisions.py ImageProcessingWorkflow 1
+warmup_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+for request in 1 2 3; do
+    gcloud functions call ImageProcessing_GetInput --region=northamerica-northeast1 \
+        --data='{"message":"test.png"}' --format='value(result)'
+done
+for attempt in {1..12}; do
+    finished=$(gcloud functions logs read ImageProcessing_Resize --region=northamerica-northeast1 \
+        --start-time="$warmup_start" --limit=100 --format='value(log)' |
+        grep -c "finished with status: 'ok'" || true)
+    if [[ "$finished" -ge 3 ]]; then break; fi
+    sleep 5
+done
+if [[ "$finished" -lt 3 ]]; then
+    echo 'Warm-up did not complete; check the function logs.'
+    exit 1
+fi
+nohup bash initialDeploy.sh ImageProcessingWorkflow 1 latency \
+    > scheduler/logs/initialDeploy.log 2>&1 < /dev/null &
+printf 'UnFaaSener started (PID %s). Log: ~/unfaasener/scheduler/logs/initialDeploy.log\n' "$!"
+REMOTE
