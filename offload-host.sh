@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID]"
+usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID] [--logs-only]"
 if [[ $# -eq 0 || $1 == --help ]]; then
     echo "$usage"
     exit 0
@@ -12,8 +12,14 @@ host_key=
 monitor_key=
 scheduler_key=
 project=serverless-research-espol
+logs_only=false
 
 while [[ $# -gt 0 ]]; do
+    if [[ $1 == --logs-only ]]; then
+        logs_only=true
+        shift
+        continue
+    fi
     if [[ $# -lt 2 ]]; then echo "$usage"; exit 1; fi
     case "$1" in
         --host-key) host_key=$2 ;;
@@ -24,6 +30,16 @@ while [[ $# -gt 0 ]]; do
     esac
     shift 2
 done
+
+follow_logs() {
+    echo 'Following UnFaaSener logs. Ctrl+C stops viewing; the agents keep running.'
+    ssh -t "$target" 'exec tail -n 30 -F "$HOME/unfaasener/scheduler/logs/initialDeploy.log" "$HOME/unfaasener/scheduler/logs/scheduler.log"'
+}
+
+if [[ "$logs_only" == true ]]; then
+    follow_logs
+    exit 0
+fi
 
 ssh "$target" 'bash -se' <<'REMOTE'
 set -o pipefail
@@ -107,3 +123,5 @@ nohup bash initialDeploy.sh ImageProcessingWorkflow 1 latency \
     > scheduler/logs/initialDeploy.log 2>&1 < /dev/null &
 printf 'UnFaaSener started (PID %s). Log: ~/unfaasener/scheduler/logs/initialDeploy.log\n' "$!"
 REMOTE
+
+follow_logs

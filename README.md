@@ -113,3 +113,13 @@ The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/inst
 Startup uses UTC timestamps and three `test.png` warm-up requests so the original collector has two complete records for traffic-rate estimation. It waits for the warm-ups, then runs `initialDeploy.sh` in the background. An existing run is kept; a fresh run stops Docker containers and clears workflow history through the original initializer. Output: `~/unfaasener/scheduler/logs/initialDeploy.log`.
 
 Logs Viewer (`roles/logging.viewer`) is granted to `unfaas-host` for log collection. IAM roles belong to the service account; its existing JSON key remains valid without changes.
+
+The venv is reused and pip skips satisfied requirements. Julia's executable is reused too, but `setup.sh` still runs Julia's `Pkg.add` dependency setup on each full run.
+
+After startup, the helper streams the main output and scheduler log over SSH. **Ctrl+C stops the viewer; UnFaaSener stays running.** Reconnect without running setup again:
+
+```bash
+./offload-host.sh user@host --logs-only
+```
+
+Inside the VM, use `tail -n 30 -F ~/unfaasener/scheduler/logs/initialDeploy.log ~/unfaasener/scheduler/logs/scheduler.log`. Running `initialDeploy.sh` directly keeps it in the foreground; the helper uses `nohup` to detach it.
