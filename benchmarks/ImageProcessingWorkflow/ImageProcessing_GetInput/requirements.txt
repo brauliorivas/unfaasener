@@ -5,3 +5,4 @@ itsdangerous==2.0.1
 google-cloud-datastore==1.13.2
 google-cloud-pubsub>=0.28.1
 numpy
+Werkzeug==2.3.8
