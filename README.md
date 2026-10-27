@@ -71,3 +71,42 @@ This work was supported by the Natural Sciences and Engineering Research Council
 We are also thankful for cloud resources made available to us by the Digital Research Alliance of Canada, the Google Cloud Research Credits program, and the AWS Cloud Credit for Research program.
 
 In addition to authors of our paper (Ghazal Sadeghian, Mohamed Elsakhawy, Mohanna Shahrad, Joe Hattori, and Mohammad Shahrad), we acknowledge Parshan Javanrood who played an important role in optimizing UnFaaSener's solver.
+
+## DiSel Serverless Research code changes
+
+We are researching the **average time UnFaaSener takes to start an offloaded function's Docker container** on a CloudLab host. The agents run natively; GCP runs the serverless baseline.
+
+Changes so far:
+
+- Added `profile.py` to create a configurable CloudLab node.
+- Fixed Julia JSON parser compatibility and adjusted the existing CI test launcher.
+- Updated Image Processing's bucket names and pinned `Werkzeug==2.3.8` for Flask 2.1 compatibility.
+- Raised `ImageProcessing_GetInput` to 256 MiB and matched its workflow memory metadata.
+- Added `offload-host.sh` for SSH setup with a Python virtual environment. `setup.sh` now keeps an existing Docker installation.
+
+## GCP and offload host setup
+
+Steps followed for `serverless-research-espol`, using `northamerica-northeast1`:
+
+1. Enabled billing and the Cloud Functions, Cloud Build, Artifact Registry, IAM, Storage, Pub/Sub, Datastore/Firestore, Logging and Monitoring APIs.
+2. Created service accounts: `unfaasener-monitoring` (Monitoring Admin/Viewer), `unfaas-scheduler` (Cloud Datastore Owner), and `unfaas-host` (Cloud Functions Admin, Cloud Datastore Owner, Pub/Sub Publisher/Subscriber, Storage Object User, Logs Viewer). Downloaded their JSON keys to the [documented locations](./scheduler/key/).
+3. Created the default database in **Datastore mode**, in the same region.
+4. Created private Standard buckets `serverless-research-espol-imageprocessingsamples` and `serverless-research-espol-imageprocessingworkflowstorage`, with uniform bucket-level access. Uploaded the repository's `benchmarks/aws_step_functions/powerTuning/ImageProcessingBenchmark/sample_1/test.png` to the input bucket as `test.png`.
+5. Created topics `ImageProcessing_Flip`, `ImageProcessing_Rotate`, `ImageProcessing_Filter`, `ImageProcessing_Greyscale`, `ImageProcessing_Resize`, and `vmTopic1`. Created pull subscription `vmSubscriber1` for `vmTopic1`; no dead-letter topic for this single-host setup.
+6. Set `projectid` in `project-config.ini` and `PROJECT_ID` in all six Image Processing functions to the project ID. Set the functions' input/output bucket names to the names above.
+7. Created Datastore kind `routingDecision`, entity `ImageProcessingWorkflow`: string `active = "50"`; strings `routing_25`, `routing_50`, `routing_75`, `routing_95` all set to `[[0], [0], [0], [0], [0], [0]]` (all stages on serverless).
+8. Deployed all six functions as **Gen 1**, **Python 3.12**, **256 MiB**, with runtime service account `unfaas-host@serverless-research-espol.iam.gserviceaccount.com`. GetInput uses an authenticated HTTP trigger; the workers use their matching Pub/Sub topics. Entry points: `get`, `flip`, `rotate`, `filterr`, `greyscale`, `resize`.
+9. Called GetInput with `{"message":"test.png"}` and checked all stages, logs and the resized output in Storage.
+
+For a replacement Ubuntu CloudLab host with SSH and passwordless sudo, run from your computer:
+
+```bash
+./offload-host.sh user@host \
+  --host-key /path/to/vmExeModule.json \
+  --monitor-key /path/to/monitoringKey.json \
+  --scheduler-key /path/to/schedulerKey.json
+```
+
+The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, copies only missing keys, authenticates gcloud with the host key, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-research-espol`; override with `--project ID`. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It prepares the machine without starting the agents.
+
+Logs Viewer (`roles/logging.viewer`) is granted to `unfaas-host` for log collection. IAM roles belong to the service account; its existing JSON key remains valid without changes.
