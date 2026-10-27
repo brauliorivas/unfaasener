@@ -57,7 +57,9 @@ else
     fi
 fi
 python3 -m pip install -r requirements.txt
-sudo apt install -y docker.io
+if ! command -v docker > /dev/null; then
+    sudo apt install -y docker.io
+fi
 sudo apt-get install -y libpstreams-dev
 sudo apt-get install build-essential
 sudo  usermod -a -G docker  $USER
