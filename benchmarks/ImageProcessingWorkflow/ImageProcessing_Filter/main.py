@@ -51,7 +51,7 @@ def filterr(event, context):
 
 def ImageProcessing_Filter(fileName):
     storage_client = storage.Client()
-    bucket = storage_client.bucket("imageprocessingworkflowstorage")
+    bucket = storage_client.bucket("serverless-research-espol-imageprocessingworkflowstorage")
     blob = bucket.blob(fileName)
     blob.download_to_filename("/tmp/"+fileName)
     image = Image.open("/tmp/"+fileName)

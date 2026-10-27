@@ -26,7 +26,7 @@ def resize(event, context):
     routingData = (event['attributes'])['routing']
     fileName = (json.loads(base64.b64decode(event['data']).decode('utf-8')))['data']['imageName']
     storage_client = storage.Client()
-    bucket = storage_client.bucket("imageprocessingworkflowstorage")
+    bucket = storage_client.bucket("serverless-research-espol-imageprocessingworkflowstorage")
     blob = bucket.blob(fileName)
     blob.download_to_filename("/tmp/"+fileName)
     image = Image.open("/tmp/"+fileName)
@@ -45,9 +45,9 @@ def resize(event, context):
 
 def garbage(reqID):
     storage_client = storage.Client()
-    blobs = storage_client.list_blobs("imageprocessingworkflowstorage")
+    blobs = storage_client.list_blobs("serverless-research-espol-imageprocessingworkflowstorage")
     blobsNames = [blob.name for blob in blobs if reqID in blob.name ]
-    bucket = storage_client.bucket("imageprocessingworkflowstorage")
+    bucket = storage_client.bucket("serverless-research-espol-imageprocessingworkflowstorage")
 
     for blob in blobsNames:
         if not ((blob).startswith("resized-")):

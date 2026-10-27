@@ -64,7 +64,7 @@ def flip(event, context):
 
 def ImageProcessing_Flip(fileName, reqID):
     storage_client = storage.Client()
-    bucket = storage_client.bucket("imageprocessingworkflowstorage")
+    bucket = storage_client.bucket("serverless-research-espol-imageprocessingworkflowstorage")
     bucketInit = storage_client.bucket("serverless-research-espol-imageprocessingsamples")
     blob = bucketInit.blob(fileName)
     blob.download_to_filename("/tmp/"+fileName)
