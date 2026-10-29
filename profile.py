@@ -24,8 +24,8 @@ pc.defineParameter(
 )
 pc.defineParameter(
     "diskImage", "Disk Image", portal.ParameterType.IMAGE,
-    "urn:publicid:IDN+emulab.net+image+emulab-ops//UBUNTU24-64-STD",
-    longDescription="Choose an image compatible with your selected hardware architecture.",
+    "",
+    longDescription="Leave empty to use CloudLab's default image, or choose a compatible image.",
 )
 pc.defineParameter(
     "routableIP", "Require Routable IP", portal.ParameterType.BOOLEAN, False,
@@ -52,6 +52,7 @@ else:
     if params.hardwareType:
         node.hardware_type = params.hardwareType
 
-node.disk_image = params.diskImage
+if params.diskImage:
+    node.disk_image = params.diskImage
 node.routable_control_ip = params.routableIP
 pc.printRequestRSpec()
