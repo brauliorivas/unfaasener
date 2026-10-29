@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID] [--logs-only]"
+usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID] [--mode latency|cost] [--logs-only]"
 if [[ $# -eq 0 || $1 == --help ]]; then
     echo "$usage"
     exit 0
@@ -26,10 +26,16 @@ while [[ $# -gt 0 ]]; do
         --monitor-key) monitor_key=$2 ;;
         --scheduler-key) scheduler_key=$2 ;;
         --project) project=$2 ;;
+        --mode) mode=$2 ;;
         *) echo "$usage"; exit 1 ;;
     esac
     shift 2
 done
+
+case "$mode" in
+    latency|cost) ;;
+    *) echo "Invalid mode: $mode. Use latency or cost." >&2; exit 1 ;;
+esac
 
 follow_logs() {
     echo 'Following UnFaaSener logs. Ctrl+C stops viewing; the agents keep running.'
@@ -45,7 +51,7 @@ ssh "$target" 'bash -se' <<'REMOTE'
 set -o pipefail
 export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
 sudo apt-get update
-sudo apt-get install -y git curl ca-certificates gnupg python3-pip python3-venv build-essential
+sudo apt-get install -y git curl ca-certificates gnupg python3-venv build-essential
 
 if ! command -v gcloud >/dev/null; then
     curl -fsSL https://packages.cloud.google.com/apt/doc/apt-key.gpg |
@@ -66,6 +72,9 @@ fi
 mkdir -p "$HOME/unfaasener/scheduler/key" "$HOME/unfaasener/host-agents/execution-agent"
 REMOTE
 
+# The CLI uses your user login; the Python agents use their separate JSON keys.
+ssh -t "$target" 'export PATH="$HOME/google-cloud-sdk/bin:$PATH"; gcloud auth login --no-launch-browser'
+
 copy_key() {
     if ssh "$target" "test -f unfaasener/$2"; then return; fi
     if [[ -z "$1" || ! -f "$1" ]]; then
@@ -83,7 +92,7 @@ printf -v project_arg '%q' "$project"
 ssh "$target" "bash -se -- $project_arg" <<'REMOTE'
 export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
 cd "$HOME/unfaasener"
-gcloud auth activate-service-account --key-file=host-agents/execution-agent/vmExeModule.json --project="$1"
+gcloud config set project "$1"
 sed -i "s/^projectid *=.*/projectid = $1/" project-config.ini
 if [[ ! -x venv/bin/pip ]]; then python3 -m venv venv; fi
 source venv/bin/activate
@@ -92,7 +101,8 @@ bash -e build.sh
 sudo systemctl enable --now docker
 REMOTE
 
-ssh "$target" 'bash -se' <<'REMOTE'
+printf -v mode_arg '%q' "$mode"
+ssh "$target" "bash -se -- $mode_arg" <<'REMOTE'
 export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
 export TZ=UTC PYTHONUNBUFFERED=1
 cd "$HOME/unfaasener"
@@ -119,7 +129,7 @@ if [[ "$finished" -lt 3 ]]; then
     echo 'Warm-up did not complete; check the function logs.'
     exit 1
 fi
-nohup bash initialDeploy.sh ImageProcessingWorkflow 1 latency \
+nohup bash initialDeploy.sh ImageProcessingWorkflow 1 "$1" \
     > scheduler/logs/initialDeploy.log 2>&1 < /dev/null &
 printf 'UnFaaSener started (PID %s). Log: ~/unfaasener/scheduler/logs/initialDeploy.log\n' "$!"
 REMOTE
