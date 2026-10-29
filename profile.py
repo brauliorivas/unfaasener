@@ -15,7 +15,7 @@ request = pc.makeRequestRSpec()
 
 pc.defineParameter("nodeName", "Name", portal.ParameterType.STRING, "node1")
 pc.defineParameter(
-    "nodeType", "Node Type", portal.ParameterType.STRING, "raw",
+    "nodeType", "Node Type", portal.ParameterType.STRING, "vm",
     [("raw", "Bare metal"), ("vm", "Xen VM")],
 )
 pc.defineParameter(
@@ -28,11 +28,11 @@ pc.defineParameter(
     longDescription="Choose an image compatible with your selected hardware architecture.",
 )
 pc.defineParameter(
-    "routableIP", "Require Routable IP", portal.ParameterType.BOOLEAN, True,
+    "routableIP", "Require Routable IP", portal.ParameterType.BOOLEAN, False,
     longDescription="Request a public control IP for a VM. Bare-metal nodes already have one.",
 )
 pc.defineParameter(
-    "vmCores", "VM CPU cores", portal.ParameterType.INTEGER, 6,
+    "vmCores", "VM CPU cores", portal.ParameterType.INTEGER, 4,
     longDescription="Used only when Node Type is Xen VM.",
 )
 pc.defineParameter(
