@@ -110,13 +110,13 @@ For a replacement Ubuntu CloudLab host with SSH and passwordless sudo, run from 
   --mode cost
 ```
 
-The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, authenticates gcloud with your user account (`gcloud auth login --no-launch-browser`), copies only missing agent keys, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-espol-research`; override with `--project ID`. The script sets both the gcloud default project and `project-config.ini`, which the Python agents read separately. The agents still require their JSON keys; the CLI login does not replace those credentials. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It then starts `ImageProcessingWorkflow` with one offload host. Select `--mode latency` (the default) or `--mode cost`; any other mode is rejected before connecting to the host. An existing run is kept with its current mode.
+The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, authenticates gcloud with your user account (`gcloud auth login --no-launch-browser`), copies only missing agent keys, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-research-espol`; override with `--project ID`. The script sets both the gcloud default project and `project-config.ini`, which the Python agents read separately. The agents still require their JSON keys; the CLI login does not replace those credentials. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It then starts `ImageProcessingWorkflow` with one offload host. Select `--mode latency` (the default) or `--mode cost`; any other mode is rejected before connecting to the host. An existing run is kept with its current mode.
 
 Startup uses UTC timestamps and three `test.png` warm-up requests so the original collector has two complete records for traffic-rate estimation. It waits for the warm-ups, then runs `initialDeploy.sh` in the background. An existing run is kept; a fresh run stops Docker containers and clears workflow history through the original initializer. Output: `~/unfaasener/scheduler/logs/initialDeploy.log`.
 
 Logs Viewer (`roles/logging.viewer`) is granted to `unfaas-host` for log collection. IAM roles belong to the service account; its existing JSON key remains valid without changes.
 
-The venv is reused and pip skips satisfied requirements. Julia's executable is reused too, but `setup.sh` still runs Julia's `Pkg.add` dependency setup on each full run.
+The script installs `python3.12` and `python3.12-venv`, adding the Deadsnakes PPA if Python 3.12 is unavailable in the configured Ubuntu package sources. It creates the environment with `python3.12 -m venv venv`. System Python is unchanged, and pip skips satisfied requirements. Julia's executable is reused too, but `setup.sh` still runs Julia's `Pkg.add` dependency setup on each full run.
 
 After startup, the helper streams the main output and scheduler log over SSH. **Ctrl+C stops the viewer; UnFaaSener stays running.** Reconnect without running setup again:
 
@@ -125,3 +125,5 @@ After startup, the helper streams the main output and scheduler log over SSH. **
 ```
 
 Inside the VM, use `tail -n 30 -F ~/unfaasener/scheduler/logs/initialDeploy.log ~/unfaasener/scheduler/logs/scheduler.log`. Running `initialDeploy.sh` directly keeps it in the foreground; the helper uses `nohup` to detach it.
+
+For a single manual request and how to distinguish host execution from GCP execution, see [Manual request verification](docs/manual-request-verification.md).
