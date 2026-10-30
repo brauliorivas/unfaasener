@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID] [--mode latency|cost] [--logs-only]"
+usage="Usage: $0 user@host [--host-key FILE] [--monitor-key FILE] [--scheduler-key FILE] [--project ID]"
 if [[ $# -eq 0 || $1 == --help ]]; then
     echo "$usage"
     exit 0
@@ -12,40 +12,23 @@ host_key=
 monitor_key=
 scheduler_key=
 project=serverless-research-espol
-mode=latency
-logs_only=false
 
 while [[ $# -gt 0 ]]; do
-    if [[ $1 == --logs-only ]]; then
-        logs_only=true
-        shift
-        continue
-    fi
     if [[ $# -lt 2 ]]; then echo "$usage"; exit 1; fi
     case "$1" in
         --host-key) host_key=$2 ;;
         --monitor-key) monitor_key=$2 ;;
         --scheduler-key) scheduler_key=$2 ;;
         --project) project=$2 ;;
-        --mode) mode=$2 ;;
         *) echo "$usage"; exit 1 ;;
     esac
     shift 2
 done
 
-case "$mode" in
-    latency|cost) ;;
-    *) echo "Invalid mode: $mode. Use latency or cost." >&2; exit 1 ;;
-esac
-
-follow_logs() {
-    echo 'Following UnFaaSener logs. Ctrl+C stops viewing; the agents keep running.'
-    ssh -t "$target" 'exec tail -n 30 -F "$HOME/unfaasener/scheduler/logs/initialDeploy.log" "$HOME/unfaasener/scheduler/logs/scheduler.log"'
-}
-
-if [[ "$logs_only" == true ]]; then
-    follow_logs
-    exit 0
+if [[ "$target" == -* ]]; then echo 'Expected an SSH host.' >&2; exit 1; fi
+if [[ ! "$project" =~ ^[a-z][a-z0-9-]{4,61}[a-z0-9]$ ]]; then
+    echo 'Invalid project ID.' >&2
+    exit 1
 fi
 
 ssh "$target" 'bash -se' <<'REMOTE'
@@ -124,37 +107,4 @@ bash -e build.sh
 sudo systemctl enable --now docker
 REMOTE
 
-printf -v mode_arg '%q' "$mode"
-ssh "$target" "bash -se -- $mode_arg" <<'REMOTE'
-export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
-export TZ=UTC PYTHONUNBUFFERED=1
-cd "$HOME/unfaasener"
-source venv/bin/activate
-if pgrep -u "$USER" -f '^bash initialDeploy.sh ' >/dev/null; then
-    echo 'UnFaaSener is already running.'
-    exit 0
-fi
-rm -f scheduler/juliaStdin scheduler/juliaStdout
-python3 scheduler/resetRoutingDecisions.py ImageProcessingWorkflow 1
-warmup_start=$(date -u +%Y-%m-%dT%H:%M:%SZ)
-for request in 1 2 3; do
-    gcloud functions call ImageProcessing_GetInput --region=northamerica-northeast1 \
-        --data='{"message":"test.png"}' --format='value(result)'
-done
-for attempt in {1..12}; do
-    finished=$(gcloud functions logs read ImageProcessing_Resize --region=northamerica-northeast1 \
-        --start-time="$warmup_start" --limit=100 --format='value(log)' |
-        grep -c "finished with status: 'ok'" || true)
-    if [[ "$finished" -ge 3 ]]; then break; fi
-    sleep 5
-done
-if [[ "$finished" -lt 3 ]]; then
-    echo 'Warm-up did not complete; check the function logs.'
-    exit 1
-fi
-nohup bash initialDeploy.sh ImageProcessingWorkflow 1 "$1" \
-    > scheduler/logs/initialDeploy.log 2>&1 < /dev/null &
-printf 'UnFaaSener started (PID %s). Log: ~/unfaasener/scheduler/logs/initialDeploy.log\n' "$!"
-REMOTE
-
-follow_logs
+echo "Setup complete. Start with: ./start.sh $target --initialize"

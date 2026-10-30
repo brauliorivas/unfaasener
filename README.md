@@ -82,7 +82,7 @@ Changes so far:
 - Fixed Julia JSON parser compatibility and adjusted the existing CI test launcher.
 - Updated Image Processing's bucket names and pinned `Werkzeug==2.3.8` for Flask 2.1 compatibility.
 - Raised `ImageProcessing_GetInput` to 256 MiB and matched its workflow memory metadata.
-- Added `offload-host.sh` to prepare the host, initialize routing and start the agents. `setup.sh` keeps an existing Docker installation.
+- Added `full_setup.sh`, `start.sh` and `stop.sh` for the host lifecycle. `setup.sh` keeps an existing Docker installation.
 - Offloaded images use Python 3.12, `setuptools<81` for the old Datastore SDK, and files owned by the original `bin` runtime user.
 
 ## GCP and offload host setup
@@ -99,31 +99,32 @@ Steps followed for `serverless-research-espol`, using `northamerica-northeast1`:
 8. Deployed all six functions as **Gen 1**, **Python 3.12**, **256 MiB**, with runtime service account `unfaas-host@serverless-research-espol.iam.gserviceaccount.com`. GetInput uses an authenticated HTTP trigger; the workers use their matching Pub/Sub topics. Entry points: `get`, `flip`, `rotate`, `filterr`, `greyscale`, `resize`.
 9. Called GetInput with `{"message":"test.png"}` and checked all stages, logs and the resized output in Storage.
 
-For a replacement Ubuntu CloudLab host with SSH and passwordless sudo, run from your computer:
+For an Ubuntu CloudLab host with SSH and passwordless sudo, run from your computer:
 
 ```bash
-./offload-host.sh user@host \
+# Install dependencies, configure credentials/project, and build. Does not start agents.
+./full_setup.sh user@host \
   --host-key /path/to/vmExeModule.json \
   --monitor-key /path/to/monitoringKey.json \
   --scheduler-key /path/to/schedulerKey.json \
-  --project serverless-espol-research \
-  --mode cost
+  --project serverless-research-espol
+
+# Start without resetting state.
+./start.sh user@host --mode latency
+
+# Stop the processes started by start.sh.
+./stop.sh user@host
+
+# Explicitly reset workflow history, stop its containers and drain the subscription.
+./start.sh user@host --initialize --mode cost
 ```
 
-The script installs missing [gcloud](https://docs.cloud.google.com/sdk/docs/install-sdk#deb) and [Julia](https://julialang.org/downloads/), clones `~/unfaasener` if absent, authenticates gcloud with your user account (`gcloud auth login --no-launch-browser`), copies only missing agent keys, configures the project, and runs `setup.sh` and `build.sh` inside `venv`. The project defaults to `serverless-research-espol`; override with `--project ID`. The script sets both the gcloud default project and `project-config.ini`, which the Python agents read separately. The agents still require their JSON keys; the CLI login does not replace those credentials. Existing clones are kept without pulling; publish local changes before cloning onto a new host. It then starts `ImageProcessingWorkflow` with one offload host. Select `--mode latency` (the default) or `--mode cost`; any other mode is rejected before connecting to the host. An existing run is kept with its current mode.
+These scripts replace `offload-host.sh` and use `~/unfaasener` on the remote host. Setup installs dependencies, copies missing keys, configures the project and runs the existing setup/build scripts. Existing checkouts are kept without pulling.
 
-Startup uses UTC timestamps and three `test.png` warm-up requests so the original collector has two complete records for traffic-rate estimation. It waits for the warm-ups, then runs `initialDeploy.sh` in the background. An existing run is kept; a fresh run stops Docker containers and clears workflow history through the original initializer. Output: `~/unfaasener/scheduler/logs/initialDeploy.log`.
+`start.sh` mirrors the startup commands in `initialDeploy.sh`, adding `nohup` and saving agent PIDs in `~/.unfaasener.pids` for `stop.sh`. `--mode` is optional; omission keeps the configured mode. `initialDeploy.sh` is unchanged.
 
-Logs Viewer (`roles/logging.viewer`) is granted to `unfaas-host` for log collection. IAM roles belong to the service account; its existing JSON key remains valid without changes.
+Only `--initialize` runs the reset steps copied from `initialDeploy.sh`. No automatic warm-up requests are sent. The original log collector still needs completed cloud executions as input; prepare those before starting a fresh experiment. Normal scheduling can update routing after startup.
 
-The script installs `python3.12` and `python3.12-venv`, adding the Deadsnakes PPA if Python 3.12 is unavailable in the configured Ubuntu package sources. It creates the environment with `python3.12 -m venv venv`. System Python is unchanged, and pip skips satisfied requirements. Julia's executable is reused too, but `setup.sh` still runs Julia's `Pkg.add` dependency setup on each full run.
+Wait for workflow requests and scheduling work to finish before stopping. Stop sends termination signals to the saved agents and retains containers, images and experiment data. Logs append to `~/unfaasener/scheduler/logs/initialDeploy.log`; view them with SSH/tail when needed.
 
-After startup, the helper streams the main output and scheduler log over SSH. **Ctrl+C stops the viewer; UnFaaSener stays running.** Reconnect without running setup again:
-
-```bash
-./offload-host.sh user@host --logs-only
-```
-
-Inside the VM, use `tail -n 30 -F ~/unfaasener/scheduler/logs/initialDeploy.log ~/unfaasener/scheduler/logs/scheduler.log`. Running `initialDeploy.sh` directly keeps it in the foreground; the helper uses `nohup` to detach it.
-
-For a single manual request and how to distinguish host execution from GCP execution, see [Manual request verification](docs/manual-request-verification.md).
+For request verification, see [Manual request verification](docs/manual-request-verification.md).

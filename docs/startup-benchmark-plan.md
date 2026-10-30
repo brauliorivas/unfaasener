@@ -1,111 +1,98 @@
-# UnFaaSener startup benchmark reference
+# Startup benchmark plan
 
-Status: proposed design; no benchmark results yet.
+Start with ImageProcessing, then repeat with the other example workflows. Implementation is pending. Experiment sizes and schedules are configurable; no numerical budgets are fixed yet.
 
-## Goal and scope
+## Measurements
 
-Measure how long UnFaaSener takes to prepare an offloaded function and start useful work, then measure completion separately.
+Record three timestamps for each offloaded worker invocation:
 
-- **Image** = stored template; **container** = execution environment created/started from it.
-- Missing function image: download source/metadata → build image locally → create/start container → execute Python. Base-image pulling may occur during the build.
-- Existing container: restart if stopped, then execute Python. Even a running container starts a new Python process and imports for each invocation.
-- Current implementation has no separate pool of generic prewarmed skeleton containers.
-
-## Experiment sequence
-
-1. **Validate instrumentation on Flip.** It is first in the chain and easier to debug; it has no special representative status.
-2. **Benchmark all five ImageProcessing workers**, forced onto the host (`0AAAAA`). GetInput remains in GCP. Send authenticated HTTP requests; wait for complete workflow execution before resetting and sending the next request.
-3. **Broaden functions/dependencies:** add lightweight and heavier numerical/ML functions if making claims beyond ImageProcessing.
-4. **Replay a trace** with natural caching to measure the workload-dependent mixture of startup states. Add concurrency/background load experiments afterward.
-
-One workflow is enough for an ImageProcessing-specific result. Multiple dependency stacks improve startup generality; multiple full workflows become useful for studying DAG structure, fan-out, contention and completion latency.
-
-## Four conditions—measure separately
-
-| Condition | State before each request |
+| Timestamp | Where |
 |---|---|
-| Running reuse | Function image and idle running container exist |
-| Stopped restart | Image and stopped container exist |
-| New container | Image exists; container absent |
-| Missing image | Function image and container absent; explicit cache policy |
+| T0: received | First operation in `vmModule.callback()` |
+| T1: dispatched | Immediately before Docker `exec_run()`, on both execution paths |
+| T2: handler entered | First executable statement in the function handler |
 
-Stopped restart and new-container startup most directly answer the original question. Deleting images every time measures first-use preparation, not typical operation.
+- **Startup:** T2 − T0. This is the main result.
+- **Preparation:** T1 − T0.
+- **Python startup:** T2 − T1.
 
-For missing-image trials, distinguish final-image absence with cached layers, function build without cache but base image present, and optional fresh-host/base-image-absent trials. **Image deletion alone does not clear build caches.** Keep preparation/reset outside measurement and verify the actual state.
+Use `perf_counter_ns()` and verify compatible host/container clocks. Capture timestamps in memory and export after execution. Function execution time is excluded; still check completion and success. Time waiting before the host callback is outside this measurement.
 
-Agent bookkeeping must match Docker state: it caches container references and metadata. Reset that bookkeeping consistently or restart/ready the agent outside timing under a declared policy. Do not rerun full deployment for every sample; it changes state and sends warm-ups.
+## Controlled full-offload experiment
 
-## Timing and records
+Use `0AAAAA`: GetInput stays in GCP; all five workers run on the host. Keep routing and admission settings fixed. **No separate latency/cost runs.**
 
-Record events at: message receipt → admission → source/metadata preparation → image build → container create → start/restart → Python dispatch → handler entry → handler exit → agent completion. Capture boundaries and success/failure for each applicable phase.
+Prepare all workers in one of these states before each measured workflow:
 
-| Metric | Purpose |
-|---|---|
-| **Host message receipt → handler entry** | **Primary: delay until useful function work starts** |
-| Receipt → admission | Acknowledgment/admission waiting |
-| Source preparation; image build | First-use preparation costs |
-| Container create; start/restart | Container startup costs |
-| Python dispatch → handler entry | Dispatch, interpreter startup and imports |
-| Handler entry → exit | Function runtime |
-| Receipt → agent completion | Complete host-side attempt |
-| HTTP send → final output ready | End-to-end workflow latency |
+| State | Preparation | Warm-up execution? |
+|---|---|---|
+| Running reuse | Image and idle running container exist | Yes; leave running |
+| Stopped restart | Image and stopped container exist | Yes; then stop |
+| New container | Image exists; containers absent | No |
+| Missing image | Function images and containers absent | No |
 
-Use monotonic clocks for host-local durations; verify a common clock domain for host/container timestamps. Use UTC for correlation, not unsynchronized cross-machine subtraction. Pub/Sub callback entry defines “received”; StreamingPull does not provide a separate pull-start for every request. Record polling delay if detecting final output by polling.
+For running/stopped trials, run `warmup_requests` unmeasured workflows on freshly prepared containers (at least one successful execution per worker). New-container and missing-image trials have no function warm-up. Keep the execution agent ready in every state.
 
-Each record needs: session/run ID, reqID, function, attempt/message ID, container/image ID, observed starting state, phase timings and outcome. Assess instrumentation overhead. GetInput's HTTP response is **not** workflow completion.
+For missing-image trials, keep the pinned base image but reset function build caches before each workflow. Allow shared caches to develop between stages within that workflow. Image deletion alone does not clear build caches.
 
-## Per-function and aggregate results
+Trial loop: **prepare and verify state → send one workflow → collect records → wait for all work to finish → repeat**. Reset Docker and agent bookkeeping together. Only one workflow is in flight; GetInput's HTTP response is not completion.
 
-Report each function × condition first: count, mean, 95% confidence interval, median, p95, failures and fallback rate.
+### Pilot and main sample size
 
-Then report, separately:
+1. Run `pilot_requests_per_state` measured workflow requests. Exclude warm-up requests.
+2. Calculate each worker/state's startup mean and standard deviation from the pilot.
+3. Estimate the main count using the chosen `confidence_level` and `relative_margin`:
 
-- **Mean startup per worker invocation:** pooled timings, weighted by invocation counts.
-- **Mean accumulated startup per workflow:** sum its five worker startup durations, then average across requests.
-- **Mean workflow completion latency:** measured end to end, including execution and communication.
+   `N = ceil((z × pilot_stddev / (relative_margin × pilot_mean))²)`
 
-With equal counts and one execution per stage, pooled startup mean equals the mean of the five stage means. Retries/fallbacks break that equivalence; record actual locations and attempts. Define success-only summaries explicitly and retain failure/timeout counts.
+   `z` is the normal-distribution multiplier corresponding to `confidence_level`.
 
-100 workflow requests give 100 observations per worker—not 500 independent workflow repetitions. Account for request/session grouping in uncertainty estimates. Never mix startup conditions into an unexplained overall mean.
+4. For each state, use the largest estimated count among its workers. Review dependence between samples before fixing the count; the formula assumes independent observations.
+5. Record `main_requests_per_state` before main collection. Keep pilot and main results separate.
+6. Spread requests across `sessions` and vary state order. Report the confidence interval actually achieved.
 
-## Shared caches and ordering
+Use the same preparation procedure in pilot and main runs.
 
-Whole-workflow trials always execute Flip first. Its image build can populate caches used by later stages. This correctly measures the workflow's startup sequence, but not each function independently under identical cache conditions.
+## Natural trace replay
 
-For independent function comparisons, reset equivalent cache state before each target measurement and vary function order. Report this as a separate experiment. Do not treat the five related workers as five independent workload families.
+- Replay Azure 2021 arrivals as whole workflow requests. Derive start times from `end_timestamp − duration`; these are reconstructed execution starts, not original request-arrival timestamps.
+- Configure `trace_segments`: the selected application/function IDs and start/end times. Choose patterns of interest before testing; segment count and duration follow from this list. Preserve original spacing and idle gaps.
+- Run each schedule separately in **latency mode and cost mode**. Let the scheduler choose routing.
+- Start matched runs with the same images, no containers and the same initial scheduler history. Replay `trace_preroll_seconds` of preceding trace as unmeasured preparation, then measure without resetting.
+- Send requests on schedule without waiting for previous workflows. Let caches and the ten-minute idle policy operate naturally.
+- Validate replay before main collection. Run each configured segment `trace_repetitions` times per mode. Request count follows from the selected trace.
 
-## Sample size and controls
+## Load testing
 
-- Pilot: **30 workflow requests per condition**, producing 30 observations per worker.
-- Initial main-run budget: **100 requests per condition** (400 requests, plus 120 pilot requests). Choose the final count from pilot variability before the main run.
-- Approximate planning for a mean with 95% confidence and ±5% relative precision: `n ≈ (1.96 × SD / (0.05 × mean))²`. CV 0.25 suggests ~97; CV 0.50 suggests ~385 independent observations. Dependence/skew can require more or different analysis.
-- Spread observations across ≥5 sessions; vary condition order. Report achieved uncertainty. Five sessions and 100 observations are starting budgets, not guarantees; do not claim reliable p99 from 100 samples.
-- Fix source/dependencies/base-image digest, input, host CPU/RAM, container limits, Docker version, region/network placement and cache policy. Save commit plus local diff.
-- For controlled trials: fixed routing/concurrency, prevent scheduler overwrites, no unrelated load, one workflow in flight. Record unexpected fallback and errors; do not silently remove slow observations.
+Keep the same three timestamps. Request rate means **whole workflows per second**.
 
-## Trace replay and later directions
+**Fixed-rate full offload:** retain `0AAAAA`, with no latency/cost split. Use a capacity pilot to choose `load_rates_rps`. At each rate, run `load_preroll_seconds` of preparation followed by `load_duration_seconds` of measurement, repeated `load_repetitions` times. Start each run from the same state, send independently of completion and let containers evolve.
 
-The paper uses uniform traffic and Azure Functions Invocation Trace 2021 through FaaSProfiler. Its trace experiment studies adaptive offloading; its 250-sample count concerns Pub/Sub latency, not startup. It retains function images and stops containers after ten idle minutes.
+**Four-state startup under load:** prepare a state, then send `batch_requests` using the configured `batch_arrival_schedule`. Repeat the batch `batch_repetitions` times, restoring its initial state each time. Do not reset between overlapping requests; later requests may encounter a different state.
 
-- Replay arrivals independently of previous completion; record intended/actual send times and delayed arrivals.
-- Preserve time gaps initially. Compression changes reuse and cold-start frequency.
-- Preserve natural caching; no image deletion between requests. Use gaps long enough to exercise the ten-minute idle policy.
-- For operational results, enable normal scheduling/concurrency and report offload fraction, fallback/errors, state frequencies and latency conditional on each state. Forced-offload replay is a separately labeled experiment.
-- Repeat declared trace slices; distinguish initial transient from steady operation. A workload average depends on state frequencies, not an equal average of the four controlled means.
-- Later: representative dependencies, concurrent requests, background load, different host sizes and genuinely fresh-host startup.
+**Scaled trace replay:** run each value in `trace_time_scales` under both scheduling modes, with `trace_repetitions` per segment/scale/mode. Divide arrival gaps by the scale, including the preparation segment. Native timing is the baseline. Keep the idle timeout unchanged; scaling changes both contention and container reuse.
 
-## Fix or validate before trusting measurements
+For load/replay, run the sender on a separate machine. Record planned/actual sends, completed requests, outstanding work, failures and fallbacks. Configure `max_sender_lateness_seconds` and `completion_timeout_seconds`.
 
-- Existing duration/“Exe time after creation” combines preparation, waiting and execution; add phase timestamps.
-- Container-command exit status is not handled reliably; timing/CSV records alone do not prove success.
-- New-container output can be logged as numeric bytes.
-- Idle timestamp keys differ on creation vs reuse; correct and validate before natural-idle/trace experiments.
-- Concurrent image misses lack a per-function build lock; address or explicitly study this before concurrent cold-start trials.
+## Run configuration
 
-## References
+Store the parameters named above in a configuration file and save it with each run. Choose pilot counts and precision targets before the pilot; use its results to set main counts, rates, durations and repetitions before main collection. Use matching schedules/settings for latency/cost comparisons. Missing parameters must be supplied explicitly rather than silently assigned example defaults.
 
-- [Request tracing guide](manual-request-verification.md)
-- Implementation: `host-agents/execution-agent/vmModule.py` and `Dockerfile`.
-- [UnFaaSener paper](https://www.usenix.org/system/files/atc23-sadeghian.pdf), §§7.3, 9.1, 9.6, 9.8.
-- [FaaSProfiler](https://github.com/PrincetonUniversity/faas-profiler), [Azure trace](https://github.com/Azure/AzurePublicDataset/blob/master/AzureFunctionsInvocationTrace2021.md).
-- [Docker build cache](https://docs.docker.com/build/cache/), [NIST sample-size planning](https://www.itl.nist.gov/div898/handbook/ppc/section3/ppc333.htm).
+## Implementation work
+
+1. Add T0/T1 to [vmModule.py](../host-agents/execution-agent/vmModule.py) and generate the T2 handler hook centrally when preparing downloaded function source.
+2. Add a runner for state preparation, warm-up, sequential requests, fixed-rate traffic and trace schedules. Make endpoint, routing, inputs and completion checks configurable per workflow.
+3. Fix exit-status/output handling, stale container references and idle tracking. Verify the ten-minute timeout never stops active work. Coordinate concurrent image builds before load tests.
+4. Validate instrumentation and the four states on Flip, then run the full-workflow pilot. Check measurement overhead before main collection.
+
+## Records and results
+
+Save run/request/attempt IDs, function, actual placement/state, image/container IDs, T0/T1/T2 and outcome. Keep failed or incomplete attempts; missing timing is not zero.
+
+Save the code/dependency versions, input, host limits, cache policy and experiment settings with each run. Keep them consistent across comparisons. Use a quiet host and standardize initial storage-bucket contents.
+
+Report startup and its two parts per worker/state: count, mean, confidence interval and failures. For trace/load, also report offload fraction, state frequencies and offered/completed throughput. Account for shared sessions/workflows when calculating uncertainty.
+
+Run in this order: **instrumentation validation → controlled pilot → controlled main → native trace replay → load extensions → other workflows**.
+
+References: [Azure trace](https://github.com/Azure/AzurePublicDataset/blob/master/AzureFunctionsInvocationTrace2021.md), [sample-size formula](https://itl.nist.gov/div898/handbook/ppc/section3/ppc333.htm), [request verification](manual-request-verification.md).
