@@ -54,12 +54,24 @@ export PATH="$HOME/.juliaup/bin:$HOME/google-cloud-sdk/bin:$PATH"
 sudo apt-get update
 sudo apt-get install -y git curl ca-certificates gnupg build-essential
 
-# Ubuntu 22.04 needs Deadsnakes; Ubuntu 24.04 provides Python 3.12 itself.
-if ! apt-cache show python3.12 >/dev/null 2>&1; then
-    sudo apt-get install -y software-properties-common
-    sudo add-apt-repository ppa:deadsnakes/ppa -y
-    sudo apt-get update
-fi
+. /etc/os-release
+
+sudo apt-get install -y software-properties-common
+
+case "$VERSION_ID" in
+    22.04)
+        sudo add-apt-repository -y ppa:deadsnakes/ppa
+        ;;
+    24.04)
+        sudo add-apt-repository -y universe
+        ;;
+    *)
+        echo "Unsupported Ubuntu version: $VERSION_ID" >&2
+        exit 1
+        ;;
+esac
+
+sudo apt-get update
 sudo apt-get install -y python3.12 python3.12-venv
 
 if ! command -v gcloud >/dev/null; then
